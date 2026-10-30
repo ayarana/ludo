@@ -26,12 +26,11 @@ function doPost(e) {
     const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     const user = verifyIdToken_(body.idToken);
 
-    if (body.action === 'whoami') return json_({ ok: true, email: user.email, admin: user.admin });
+    if (!user.admin) throw new Error('ACESSO NEGADO: só o Ludo pode ser o player 1 💀');
 
-    if (body.action === 'add') {
-      if (!user.admin) throw new Error('Só o Ludo pode inserir jogos. GAME OVER 💀');
-      return json_(addGame_(body.game || {}, user.email));
-    }
+    if (body.action === 'whoami') return json_({ ok: true, email: user.email, admin: true });
+
+    if (body.action === 'add') return json_(addGame_(body.game || {}, user.email));
     throw new Error('Ação desconhecida');
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });

@@ -514,18 +514,24 @@ const AUTH = {
     const msg = $('#loginMsg'); if (msg) { msg.className = 'msg'; msg.textContent = 'VERIFICANDO NO SERVIDOR...'; }
     try {
       const r = await API.post('whoami', { idToken: token });
-      this.admin = !!r.admin; this.email = r.email || this.email;
+      if (!r.admin) throw new Error('ACESSO NEGADO: só o Ludo pode ser o player 1 💀');
+      this.admin = true; this.email = r.email || this.email;
       try { sessionStorage.setItem('ludo_tok', token); } catch (e) { }
     } catch (e) {
-      this.token = null; this.admin = false;
-      if (!quiet) { if (msg) { msg.className = 'msg err'; msg.textContent = '✖ ' + e.message; } SND.hit(); }
-      this.render(); return;
+      this.deny(p.email);
+      if (!quiet) { if (msg) { msg.className = 'msg err'; msg.textContent = '✖ ' + e.message; } SND.hit(); shake(); }
+      return;
     }
     this.render();
     if (quiet) return;
     $('#modal').classList.remove('on');
-    if (this.admin) celebrate('PLAYER 1 READY!', 'BEM-VINDO, LUDO! INSERT COIN LIBERADO');
-    else { SND.blip(); toast(`LOGADO COMO ${this.email.toUpperCase()}<br>SÓ O LUDO PODE INSERIR JOGOS 🛢`); }
+    celebrate('PLAYER 1 READY!', 'BEM-VINDO, LUDO! INSERT COIN LIBERADO');
+  },
+  deny(email) {
+    this.token = null; this.admin = false; this.email = null; this.exp = 0;
+    try { sessionStorage.removeItem('ludo_tok'); } catch (e) { }
+    if (!PREVIEW) try { google.accounts.id.disableAutoSelect(); if (email) google.accounts.id.revoke(email, () => { }); } catch (e) { }
+    this.render();
   },
   logout() {
     this.token = null; this.admin = false; this.email = null; this.exp = 0;
@@ -535,7 +541,7 @@ const AUTH = {
   },
   render() {
     const b = $('#btnLogin');
-    b.textContent = this.token ? (this.admin ? 'P1 ✔ SAIR' : '👤 SAIR') : '🔑 LOGIN';
+    b.textContent = this.admin ? 'P1 ✔ SAIR' : '🔑 LOGIN';
     b.classList.toggle('p1', this.admin);
     $('#nav [data-p=coin]').hidden = !this.admin;
     $('#coinWho').textContent = this.admin ? `▶ P1: ${this.email} ✔` : '';
@@ -574,7 +580,7 @@ async function openLogin() {
     google.accounts.id.renderButton($('#gsiBtn'), { theme: 'filled_black', size: 'large', shape: 'rectangular', text: 'signin_with', locale: 'pt-BR' });
   } catch (e) { $('#loginMsg').className = 'msg err'; $('#loginMsg').textContent = '✖ ' + e.message; }
 }
-$('#btnLogin').onclick = () => AUTH.token ? AUTH.logout() : openLogin();
+$('#btnLogin').onclick = () => AUTH.admin ? AUTH.logout() : openLogin();
 
 let toastT;
 function toast(html, ms = 3500) { const t = $('#toast'); t.innerHTML = html; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), ms); }
