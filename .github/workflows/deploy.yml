@@ -1,0 +1,102 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'apps-script/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: O que mudou?
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.f.outputs.api }}
+      site: ${{ steps.f.outputs.site }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "api=true" >> "$GITHUB_OUTPUT"; echo "site=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          echo "$CHANGED"
+          echo "$CHANGED" | grep -qE '^(apps-script/|\.github/workflows/)' && echo "api=true" >> "$GITHUB_OUTPUT" || echo "api=false" >> "$GITHUB_OUTPUT"
+          echo "$CHANGED" | grep -qE '^(site/|\.github/workflows/)' && echo "site=true" >> "$GITHUB_OUTPUT" || echo "site=false" >> "$GITHUB_OUTPUT"
+
+  apps-script:
+    name: Apps Script (API)
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' && vars.DEPLOYMENT_ID != '' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps-script
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar clasp
+        run: npm install -g @google/clasp
+
+      - name: Credenciais do clasp
+        env:
+          CLASPRC: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$CLASPRC" > ~/.clasprc.json
+          grep -q 'COLE_AQUI' .clasp.json && { echo "::error::Coloque o ID do script em apps-script/.clasp.json"; exit 1; } || true
+
+      - name: Enviar código
+        run: clasp push --force
+
+      - name: Atualizar a implantação (mesma URL /exec)
+        env:
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+        run: clasp update-deployment "$DEPLOYMENT_ID" -d "$GITHUB_SHA"
+
+  site:
+    name: Site no Netlify
+    needs: [changes, apps-script]
+    if: ${{ !cancelled() && needs.changes.outputs.site == 'true' && (needs.apps-script.result == 'success' || needs.apps-script.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Gerar site/config.js
+        env:
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        run: |
+          [[ "$DEPLOYMENT_ID" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::Defina a variável DEPLOYMENT_ID (ID da implantação do web app)"; exit 1; }
+          [[ "$GOOGLE_CLIENT_ID" == *.apps.googleusercontent.com ]] || { echo "::error::Defina a variável GOOGLE_CLIENT_ID"; exit 1; }
+          node -e 'const e=process.env;require("fs").writeFileSync("site/config.js","window.LUDO_CONFIG = "+JSON.stringify({API_URL:"https://script.google.com/macros/s/"+e.DEPLOYMENT_ID+"/exec",GOOGLE_CLIENT_ID:e.GOOGLE_CLIENT_ID})+";\n")'
+          cat site/config.js
+
+      - name: Publicar no Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli@27.12.0 deploy --dir=site --prod --no-build --message "$GITHUB_SHA"
